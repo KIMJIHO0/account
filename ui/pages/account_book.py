@@ -5,6 +5,13 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
+# tkcalendar (없으면 자동 폴백)
+try:
+    from tkcalendar import DateEntry, Calendar
+    HAVE_TKCALENDAR = True
+except Exception:
+    HAVE_TKCALENDAR = False
+
 from app.config import (
     CATEGORIES, DATE_FMT,
     COLOR_BG, COLOR_PANEL, COLOR_BORDER, COLOR_ACCENT,
@@ -15,7 +22,10 @@ from services import analytics, storage
 from services.auth import get_current_user
 from ui.components.topbar import TopBar
 
-def _comma(n: int) -> str: return f"{int(n):,}"
+
+def _comma(n: int) -> str:
+    return f"{int(n):,}"
+
 
 class AccountBookPage(ttk.Frame):
     def __init__(self, parent, app):
@@ -47,32 +57,51 @@ class AccountBookPage(ttk.Frame):
         )
         panel.pack(fill="x")
 
+        # 날짜
         ttk.Label(panel, text="날짜").grid(row=0, column=0, sticky="w")
-        self.ent_date = ttk.Entry(panel, width=12)
-        self.ent_date.grid(row=1, column=0, padx=(0, 8))
-        self.ent_date.insert(0, datetime.now().strftime(DATE_FMT))
+        if HAVE_TKCALENDAR:
+            self.ent_date = DateEntry(
+                panel, width=12, date_pattern="yyyy-mm-dd"
+            )
+            self.ent_date.grid(row=1, column=0, padx=(0, 8))
+            # 날짜 선택 시 월 입력칸 동기화 (예: 2025-08)
+            self.ent_date.bind("<<DateEntrySelected>>", lambda e: self._sync_month_from_date())
+        else:
+            self.ent_date = ttk.Entry(panel, width=12)
+            self.ent_date.grid(row=1, column=0, padx=(0, 8))
+            self.ent_date.insert(0, datetime.now().strftime(DATE_FMT))
 
+        # 구분
         ttk.Label(panel, text="구분").grid(row=0, column=1, sticky="w")
         self.cmb_type = ttk.Combobox(panel, values=["지출", "수입"], width=7, state="readonly")
-        self.cmb_type.grid(row=1, column=1, padx=(0, 8)); self.cmb_type.set("지출")
+        self.cmb_type.grid(row=1, column=1, padx=(0, 8))
+        self.cmb_type.set("지출")
 
+        # 카테고리
         ttk.Label(panel, text="카테고리").grid(row=0, column=2, sticky="w")
         self.cmb_cat = ttk.Combobox(panel, values=CATEGORIES, width=14, state="readonly")
-        self.cmb_cat.grid(row=1, column=2, padx=(0, 8)); self.cmb_cat.set(CATEGORIES[0])
+        self.cmb_cat.grid(row=1, column=2, padx=(0, 8))
+        self.cmb_cat.set(CATEGORIES[0])
 
+        # 설명
         ttk.Label(panel, text="설명").grid(row=0, column=3, sticky="w")
         self.ent_desc = ttk.Entry(panel, width=38)
         self.ent_desc.grid(row=1, column=3, padx=(0, 8))
 
+        # 금액
         ttk.Label(panel, text="금액(원)").grid(row=0, column=4, sticky="w")
         self.ent_amt = ttk.Entry(panel, width=14)
         self.ent_amt.grid(row=1, column=4, padx=(0, 16))
 
+        # 버튼 스타일
         style_btn = ttk.Style(panel)
         style_btn.configure("Accent.TButton", foreground="white", background=COLOR_ACCENT)
-        try: style_btn.map("Accent.TButton", background=[("active", COLOR_ACCENT)])
-        except Exception: pass
+        try:
+            style_btn.map("Accent.TButton", background=[("active", COLOR_ACCENT)])
+        except Exception:
+            pass
 
+        # 기능 버튼들
         ttk.Button(panel, text="추가", style="Accent.TButton", command=self._on_add)\
             .grid(row=1, column=5, padx=6)
         ttk.Button(panel, text="선택 삭제", command=self._on_delete)\
@@ -80,14 +109,25 @@ class AccountBookPage(ttk.Frame):
         ttk.Button(panel, text="홈으로", command=lambda: self.app.show("home"))\
             .grid(row=1, column=7, padx=6)
 
+        # 월(YYYY-MM) + 달력 버튼 + 그래프
         ttk.Label(panel, text="월(YYYY-MM)").grid(row=0, column=8, sticky="w")
         self.ent_month = ttk.Entry(panel, width=10)
         self.ent_month.grid(row=1, column=8, padx=(0, 6))
         self.ent_month.insert(0, datetime.now().strftime("%Y-%m"))
-        ttk.Button(panel, text="월별 그래프", command=self._on_chart)\
-            .grid(row=1, column=9, padx=(0, 0))
 
-        for c in range(10):
+        if HAVE_TKCALENDAR:
+            # 📅 버튼으로 팝업 달력에서 월 선택
+            ttk.Button(panel, text="📅", width=3, command=self._pick_month)\
+                .grid(row=1, column=9, padx=(0, 6))
+            col_for_chart = 10
+        else:
+            col_for_chart = 9
+
+        ttk.Button(panel, text="월별 그래프", command=self._on_chart)\
+            .grid(row=1, column=col_for_chart, padx=(0, 0))
+
+        # 열 간격: 최대 0~10까지
+        for c in range(11):
             panel.grid_columnconfigure(c, pad=2)
 
     def _build_table(self, parent):
@@ -172,7 +212,8 @@ class AccountBookPage(ttk.Frame):
 
         storage.append_row(tx.__dict__, self._csv_path)
         self._load_data()
-        self.ent_desc.delete(0, "end"); self.ent_amt.delete(0, "end")
+        self.ent_desc.delete(0, "end")
+        self.ent_amt.delete(0, "end")
 
     def _on_delete(self):
         sel = self.tree.selection()
@@ -183,14 +224,16 @@ class AccountBookPage(ttk.Frame):
         all_items = list(self.tree.get_children())
         keep_values = []
         for item in all_items:
-            if item in sel: continue
+            if item in sel:
+                continue
             vals = list(self.tree.item(item)["values"])
             vals[4] = int(str(vals[4]).replace(",", ""))
             keep_values.append(vals)
 
         import pandas as pd
         df = pd.DataFrame(keep_values, columns=["date", "type", "category", "description", "amount"])
-        if not df.empty: df["amount"] = df["amount"].astype(int)
+        if not df.empty:
+            df["amount"] = df["amount"].astype(int)
         storage.overwrite(df, self._csv_path)
         self._load_data()
 
@@ -199,12 +242,52 @@ class AccountBookPage(ttk.Frame):
         df = storage.read_all(self._csv_path)
         summary = analytics.month_summary(df, month)
         if summary.empty:
-            messagebox.showinfo("안내", f"{month} 데이터가 없습니다."); return
+            messagebox.showinfo("안내", f"{month} 데이터가 없습니다.")
+            return
 
-        import matplotlib.pyplot as plt
-        plt.figure(); plt.title(f"{month} 카테고리별 수입/지출")
+        plt.figure()
+        plt.title(f"{month} 카테고리별 수입/지출")
         x = range(len(summary))
         plt.bar(x, summary["수입"], label="수입", linewidth=0)
         plt.bar(x, -summary["지출"], label="지출", linewidth=0)
         plt.xticks(x, summary["category"], rotation=30)
-        plt.legend(); plt.tight_layout(); plt.show()
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    # ---------- 달력 유틸 ----------
+    def _sync_month_from_date(self):
+        """DateEntry에서 날짜를 선택하면 ent_month를 해당 'YYYY-MM'으로 동기화"""
+        try:
+            d = self.ent_date.get().strip()  # 'yyyy-mm-dd'
+            self.ent_month.delete(0, "end")
+            self.ent_month.insert(0, d[:7])  # 'yyyy-mm'
+        except Exception:
+            pass
+
+    def _pick_month(self):
+        """팝업 달력에서 임의 날짜를 선택 -> 해당 달(YYYY-MM)을 ent_month에 반영"""
+        top = tk.Toplevel(self)
+        top.title("월 선택")
+        top.transient(self.winfo_toplevel())
+        top.grab_set()
+
+        today = datetime.today()
+        cal = Calendar(top, selectmode="day", year=today.year, month=today.month, day=today.day)
+        cal.pack(padx=10, pady=10)
+
+        def _ok():
+            try:
+                sel = cal.selection_get()  # datetime.date
+                y, m = sel.year, sel.month
+                self.ent_month.delete(0, "end")
+                self.ent_month.insert(0, f"{y:04d}-{m:02d}")
+            except Exception:
+                pass
+            finally:
+                top.destroy()
+
+        btns = ttk.Frame(top)
+        btns.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btns, text="확인", command=_ok).pack(side="right")
+        ttk.Button(btns, text="취소", command=top.destroy).pack(side="right", padx=(0, 6))
