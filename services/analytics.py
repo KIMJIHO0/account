@@ -1,5 +1,3 @@
-
-
 import pandas as pd
 # 분석용 집계 함수: 월별 카테고리 합계/일자별 순증감 시리즈 생성
 def month_summary(df: pd.DataFrame, year_month: str) -> pd.DataFrame:

@@ -1,5 +1,3 @@
-
-
 from dataclasses import dataclass
 from datetime import datetime
 from app.config import DATE_FMT

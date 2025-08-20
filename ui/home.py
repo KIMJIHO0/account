@@ -12,7 +12,13 @@ import pandas as pd
 from ui.components.topbar import TopBar
 from services.auth import get_current_user
 from services import storage, analytics
-from app.config import COLOR_BORDER, COLOR_PANEL, CATEGORIES
+
+# (선택) 아바타 표시를 위한 Pillow
+try:
+    from PIL import Image, ImageTk  # type: ignore
+    HAVE_PIL = True
+except Exception:
+    HAVE_PIL = False
 
 
 class HomeFrame(ttk.Frame):
@@ -60,6 +66,9 @@ class HomeFrame(ttk.Frame):
         self.card_quick = self._make_card(page, "빠른 기록", row=1, col=1, padx=(12, 0), pady=(12, 0))
         self._build_quick_entry(self.card_quick["body"])
 
+        # 아바타 이미지 참조(가비지 컬렉션 방지)
+        self._avatar_img = None
+
     def on_show(self):
         # 화면 보여질 때마다 사용자/데이터 갱신
         self.topbar.refresh_user()
@@ -94,36 +103,55 @@ class HomeFrame(ttk.Frame):
     # -------------------- 카드 2: 프로필 --------------------
     def _build_profile(self, parent):
         """라벨만 만들어두고 값은 on_show()에서 채움 (로그인 전 None 대응)"""
-        self.lbl_profile_name = ttk.Label(parent, text="—", font=("Malgun Gothic", 22, "bold"))
-        self.lbl_profile_name.pack(pady=(8, 12))
+        row = ttk.Frame(parent)
+        row.pack(fill="x")
 
-        info = ttk.Frame(parent)
-        info.pack(fill="x", pady=(4, 10))
-        self.lbl_profile_id = ttk.Label(info, text="회원 ID : -")
+        # 아바타(왼쪽)
+        self.lbl_avatar = ttk.Label(row)
+        self.lbl_avatar.pack(side="left", padx=(0, 12))
+
+        # 텍스트 정보(오른쪽)
+        right = ttk.Frame(row)
+        right.pack(side="left", fill="x", expand=True)
+
+        self.lbl_profile_name = ttk.Label(right, text="—", font=("Malgun Gothic", 22, "bold"))
+        self.lbl_profile_name.pack(pady=(0, 6), anchor="w")
+
+        self.lbl_profile_id = ttk.Label(right, text="회원 ID : -")
         self.lbl_profile_id.pack(anchor="w", pady=2)
-        self.lbl_profile_join = ttk.Label(info, text="가입일 : -")
+        self.lbl_profile_join = ttk.Label(right, text="가입일 : -")
         self.lbl_profile_join.pack(anchor="w", pady=2)
 
-        btn = ttk.Button(parent, text="프로필 설정", command=self._profile_settings)
-        btn.pack(pady=(6, 0))
+        ttk.Button(parent, text="프로필 설정", command=self._profile_settings).pack(pady=(12, 0), anchor="e")
 
     def _update_profile_card(self):
         """로그인 후 사용자 정보로 프로필 카드 채우기 (None 안전)"""
         u = get_current_user()
         if not u:
-            # 로그인 전 또는 세션 없음
             self.lbl_profile_name.config(text="—")
             self.lbl_profile_id.config(text="회원 ID : -")
             self.lbl_profile_join.config(text="가입일 : -")
+            self.lbl_avatar.config(image="", text="(아바타 없음)")
             return
 
         self.lbl_profile_name.config(text=u.display_name)
         self.lbl_profile_id.config(text=f"회원 ID : {u.username}")
         self.lbl_profile_join.config(text=f"가입일 : {self._guess_join_date(u.username)}")
 
+        # 아바타 로드
+        if getattr(u, "avatar", None) and HAVE_PIL:
+            try:
+                im = Image.open(u.avatar)
+                im.thumbnail((96, 96))
+                self._avatar_img = ImageTk.PhotoImage(im)
+                self.lbl_avatar.config(image=self._avatar_img, text="")
+            except Exception:
+                self.lbl_avatar.config(image="", text="(이미지 오류)")
+        else:
+            self.lbl_avatar.config(image="", text="(아바타 없음)")
+
     def _guess_join_date(self, username: str) -> str:
         """사용자 CSV 파일 생성일을 가입일로 추정 (없으면 오늘)"""
-        from pathlib import Path
         csv_path = storage.csv_path_for_user(username)
         if csv_path.exists():
             try:
@@ -134,7 +162,18 @@ class HomeFrame(ttk.Frame):
         return datetime.today().strftime("%Y. %m. %d.")
 
     def _profile_settings(self):
-        messagebox.showinfo("프로필", "프로필 편집 화면은 추후 추가할 수 있어요!")
+        # 프로필 설정 모달 열기 → 닫히면 홈 새로고침
+        try:
+            from ui.pages.profile_settings import ProfileDialog
+        except Exception:
+            messagebox.showwarning("안내", "프로필 설정 화면을 찾을 수 없습니다.")
+            return
+        dlg = ProfileDialog(self)
+        self.wait_window(dlg)
+        # 저장 후 상단바/프로필 카드/차트 다시 갱신
+        self.topbar.refresh_user()
+        self._update_profile_card()
+        self._render_month_chart()
 
     # -------------------- 카드 1: 이번달 차트 --------------------
     def _render_month_chart(self):
@@ -145,7 +184,6 @@ class HomeFrame(ttk.Frame):
 
         u = get_current_user()
         if not u:
-            # 로그인 전 안전장치
             fig, ax = plt.subplots(figsize=(6, 3), dpi=100)
             ax.text(0.5, 0.5, "로그인 정보가 없습니다.", ha="center", va="center")
             ax.set_axis_off()
@@ -201,7 +239,6 @@ class HomeFrame(ttk.Frame):
 
         # 최근 7일 날짜 리스트 (과거->오늘 순)
         dates = [datetime.today() - timedelta(days=i) for i in range(6, -1, -1)]
-        date_strs = [d.strftime("%Y-%m-%d") for d in dates]
 
         # 날짜별 순증감 계산
         df2 = df.copy()

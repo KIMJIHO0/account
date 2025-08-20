@@ -11,7 +11,7 @@ from ui.login import LoginFrame
 from ui.home import HomeFrame
 from ui.pages.account_book import AccountBookPage
 from ui.pages.analytics_page import AnalyticsPage
-
+"""프로그램 메인 창 """
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
