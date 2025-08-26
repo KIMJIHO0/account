@@ -4,6 +4,21 @@ from datetime import datetime
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+import matplotlib.dates as mdates
+import pandas as pd  # 날짜 인덱스 변환용
+
+# ✅ 한글/숫자 깨짐 방지: OS별 폰트 지정
+try:
+    plt.rcParams["font.family"] = "Malgun Gothic"   # Windows
+except Exception:
+    for cand in ["AppleGothic", "NanumGothic", "DejaVu Sans"]:
+        try:
+            plt.rcParams["font.family"] = cand
+            break
+        except Exception:
+            pass
+mpl.rcParams["axes.unicode_minus"] = False
 
 # tkcalendar (없으면 자동 폴백)
 try:
@@ -43,14 +58,12 @@ class AnalyticsPage(ttk.Frame):
         self.ent_month.grid(row=0, column=1, padx=(6, 8))
         self.ent_month.insert(0, datetime.now().strftime("%Y-%m"))
 
-        # 📅 월 선택 팝업 (있으면 사용)
         btn_col_start = 2
         if HAVE_TKCALENDAR:
             ttk.Button(panel, text="📅", width=3, command=self._pick_month)\
                 .grid(row=0, column=2, padx=4)
             btn_col_start = 3
 
-        # 그래프 버튼들
         ttk.Button(panel, text="카테고리 막대", command=self._bar)\
             .grid(row=0, column=btn_col_start + 0, padx=4)
         ttk.Button(panel, text="일자 순증감", command=self._line)\
@@ -58,21 +71,18 @@ class AnalyticsPage(ttk.Frame):
         ttk.Button(panel, text="수입/지출 파이", command=self._pie)\
             .grid(row=0, column=btn_col_start + 2, padx=4)
 
-        # 안내 텍스트
         self.info = ttk.Label(content, text="월을 입력하거나 📅 버튼으로 선택한 뒤, 원하는 그래프 버튼을 클릭하세요.", anchor="w")
         self.info.pack(fill="x", pady=(10, 0))
 
     def on_show(self):
         self.topbar.refresh_user()
 
-    # ---------- 데이터 경로 ----------
     @property
     def _csv_path(self):
         from services.storage import csv_path_for_user
         u = get_current_user()
         return csv_path_for_user(u.username)
 
-    # ---------- 내부 유틸 ----------
     def _get_summary(self):
         month = self.ent_month.get().strip()
         if not self._is_valid_month(month):
@@ -116,10 +126,19 @@ class AnalyticsPage(ttk.Frame):
         if ser.size == 0:
             messagebox.showinfo("안내", f"{month} 데이터가 없습니다.")
             return
-        plt.figure()
+
+        # ✅ x축을 날짜로 처리하고 '일(01~31)' 숫자만 보이게 포맷
+        x_dt = pd.to_datetime(ser.index)              # 문자열 → datetime
+        y = ser.values
+
+        fig = plt.figure()
         plt.title(f"{month} 일자별 순증감(수입-지출)")
-        plt.plot(list(ser.index), list(ser.values), marker="o")
-        plt.xticks(rotation=45)
+        plt.plot(x_dt, y, marker="o")
+
+        ax = plt.gca()
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d"))  # 01, 02, ... 형태
+        ax.xaxis.set_major_locator(mdates.DayLocator())           # 일 단위 눈금
+        plt.xticks(rotation=0)                                    # 숫자라 회전 불필요
         plt.tight_layout()
         plt.show()
 
@@ -140,7 +159,6 @@ class AnalyticsPage(ttk.Frame):
 
     # ---------- 달력 팝업 ----------
     def _pick_month(self):
-        """팝업 달력에서 날짜를 하나 고르면, 해당 달(YYYY-MM)을 입력칸에 넣는다."""
         top = tk.Toplevel(self)
         top.title("월 선택")
         top.transient(self.winfo_toplevel())
@@ -152,7 +170,7 @@ class AnalyticsPage(ttk.Frame):
 
         def _ok():
             try:
-                sel = cal.selection_get()  # datetime.date
+                sel = cal.selection_get()
                 y, m = sel.year, sel.month
                 self.ent_month.delete(0, "end")
                 self.ent_month.insert(0, f"{y:04d}-{m:02d}")
